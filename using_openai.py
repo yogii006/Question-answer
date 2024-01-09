@@ -1,75 +1,71 @@
-# python 3.8 (3.8.16) or it doesn't work
-# pip install streamlit streamlit-chat langchain python-dotenv
+
 import streamlit as st
 from streamlit_chat import message
 from dotenv import load_dotenv
-import os
-
+from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
-from langchain.schema import (
-    SystemMessage,
-    HumanMessage,
-    AIMessage
-)
+from langchain.chains import ConversationalRetrievalChain
+from langchain.document_loaders.csv_loader import CSVLoader
+from langchain.vectorstores import FAISS
+import tempfile
 
+user_api_key = ""
+uploaded_file = st.sidebar.file_uploader("upload", type="csv")
 
-def init():
-    # Load the OpenAI API key from the environment variable
-    load_dotenv()
-    # openai_api_key="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"
-    # test that the API key exists
-    if os.getenv("OPENAI_API_KEY") is None or os.getenv("OPENAI_API_KEY") == " ":
-        print("OPENAI_API_KEY is not set")
-        exit(1)
-    else:
-        print("OPENAI_API_KEY is set")
+if uploaded_file :
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        tmp_file.write(uploaded_file.getvalue())
+        tmp_file_path = tmp_file.name
 
-    # setup streamlit page
-    st.set_page_config(
-        page_title="Hello world",
-        page_icon="chart_with_upwards_trend",
-        layout="wide",
+    loader = CSVLoader(file_path=tmp_file_path, encoding="utf-8")
+    data = loader.load()
 
-    )
+    embeddings = OpenAIEmbeddings()
+    vectors = FAISS.from_documents(data, embeddings)
 
+    chain = ConversationalRetrievalChain.from_llm(llm = ChatOpenAI(temperature=0.0,model_name='gpt-3.5-turbo', openai_api_key=user_api_key),
+                                                                      retriever=vectors.as_retriever())
+    chain = ConversationalRetrievalChain.from_llm(
+        llm=ChatOpenAI(temperature=0.0, model_name='gpt-3.5-turbo'),
+        retriever=vectors.as_retriever())
 
-def main():
-    init()
+    def conversational_chat(query):
+        
+        result = chain({"question": query, "chat_history": st.session_state['history']})
+        st.session_state['history'].append((query, result["answer"]))
+        
+        return result["answer"]
+    
+    if 'history' not in st.session_state:
+        st.session_state['history'] = []
 
-    chat = ChatOpenAI(temperature=0)
+    if 'generated' not in st.session_state:
+        st.session_state['generated'] = ["Hello ! Ask me anything about " + uploaded_file.name + " "]
 
-    # initialize message history
-    if "messages" not in st.session_state:
-        st.session_state.messages = [
-            SystemMessage(content="You are a helpful assistant.")
-        ]
+    if 'past' not in st.session_state:
+        st.session_state['past'] = ["Hey !"]
+        
+    #container for the chat history
+    response_container = st.container()
+    #container for the user's text input
+    container = st.container()
 
-    st.header("Your own ChatGPT 👨🏻‍⚖️")
+    with container:
+        with st.form(key='my_form', clear_on_submit=True):
+            
+            user_input = st.text_input("Query:", placeholder="Talk about your csv data here (:", key='input')
+            submit_button = st.form_submit_button(label='Send')
+            
+        if submit_button and user_input:
+            output = conversational_chat(user_input)
+            
+            st.session_state['past'].append(user_input)
+            st.session_state['generated'].append(output)
 
-    # sidebar with user input
-    container1 = st.container(border=True)
-    container2 = st.container(border=True)
-    with container1:
-        user_input = st.text_input("Your message: ", key="user_input")
-
-        # handle user input
-        if user_input:
-            st.session_state.messages.append(HumanMessage(content=user_input))
-            with st.spinner("Thinking..."):
-                response = chat(st.session_state.messages)
-            st.session_state.messages.append(
-                AIMessage(content=response.content))
-            user_input = ''
-
-    # display message history
-    with container2:
-        messages = st.session_state.get('messages', [])
-        for i, msg in enumerate(messages[1:]):
-            if i % 2 == 0:
-                message(msg.content, is_user=True, key=str(i) + '_user')
-            else:
-                message(msg.content, is_user=False, key=str(i) + '_ai')
-
-
-if __name__ == '__main__':
-    main()
+    if st.session_state['generated']:
+        with response_container:
+            for i in range(len(st.session_state['generated'])):
+                message(st.session_state["past"][i], is_user=True, key=str(i) + '_user', avatar_style="big-smile")
+                message(st.session_state["generated"][i], key=str(i), avatar_style="thumbs")
+                
+#streamlit run tuto_chatbot_csv.py
